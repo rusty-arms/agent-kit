@@ -1,14 +1,19 @@
 #!/usr/bin/env python3
 """Claude Code PreToolUse hook: the clean-room guard.
 
-Registered in this repo's .claude/settings.json (and, later, shipped by the
-agent-kit plugin to every project repo). See docs/setup/claude-guard.md.
+Shipped by the agent-kit plugin (hooks/hooks.json) to every session that has
+the plugin enabled. Policy: core's docs/clean-room.md and
+docs/setup/claude-guard.md.
 
 - Reads the hook input JSON from stdin.
 - Flattens tool_input into one lower-case string.
-- Exits 2 (blocking the tool call) if any blocklist term appears in it.
-- Exits 2 if it touches the lab folder, unless the session's cwd is itself
-  inside the lab (observer sessions run from there).
+- Exits 2 (blocking the tool call) if any blocklist term appears in it. This
+  applies to every tool the plugin routes here, writes and MCP tools included,
+  so forbidden names can't be fetched, searched for or written into a file.
+- Exits 2 if a reading tool (Bash, Read, Grep, Glob, WebFetch, WebSearch)
+  touches the lab folder, unless the session's cwd is itself inside the lab
+  (observer sessions run from there). Writes and MCP tools are not lab-checked,
+  so docs and messages can still name the lab's path.
 - Otherwise exits 0.
 
 The blocklist terms are never committed. They come from, in order:
@@ -20,8 +25,8 @@ With no terms at all, every guarded call is blocked (fail closed), except in
 a Claude Code cloud session (CLAUDE_CODE_REMOTE set), which only gets a
 warning so it is not locked out before its environment is configured.
 
-Environment overrides (for testing): CLEANROOM_BLOCKLIST, CLEANROOM_LAB.
-Standard library only.
+Environment overrides: CLEANROOM_BLOCKLIST (blocklist file), CLEANROOM_LAB
+(lab folder). Standard library only.
 """
 
 import json
@@ -33,13 +38,14 @@ BLOCKLIST = os.environ.get(
     "CLEANROOM_BLOCKLIST", os.path.join(HOME, ".claude", "cleanroom-blocklist.txt")
 )
 LAB = os.environ.get("CLEANROOM_LAB", "~/Develop/rusty-arms/ma-lab")
+POLICY = "https://github.com/rusty-arms/core/blob/main/docs/clean-room.md"
+
+# Tools whose input can read local files or the web. Only these are lab-checked.
+LAB_CHECKED_TOOLS = {"Bash", "Read", "Grep", "Glob", "WebFetch", "WebSearch"}
 
 
 def block(reason):
-    print(
-        f"cleanroom-guard: blocked: {reason}. See docs/clean-room.md; tell the owner.",
-        file=sys.stderr,
-    )
+    print(f"cleanroom-guard: blocked: {reason}. See {POLICY}; tell the owner.", file=sys.stderr)
     sys.exit(2)
 
 
@@ -73,7 +79,7 @@ def main():
         if os.environ.get("CLAUDE_CODE_REMOTE"):
             print(
                 "cleanroom-guard: warning: no blocklist terms; set CLEANROOM_BLOCKLIST_TERMS "
-                "in this cloud environment. See docs/setup/claude-guard.md.",
+                "in this cloud environment.",
                 file=sys.stderr,
             )
         else:
@@ -83,11 +89,15 @@ def main():
         if term in text:
             block("input matches a clean-room blocklist term")
 
+    # A missing tool_name (older callers, tests) is treated as a reading tool.
+    if data.get("tool_name", "Read") not in LAB_CHECKED_TOOLS:
+        sys.exit(0)
+
     lab_raw = LAB.rstrip("/").lower()
     lab_abs = os.path.expanduser(LAB).rstrip("/")
     lab_name = os.path.basename(lab_abs).lower()
-    # Raw form (~/ma-lab), expanded form, $HOME forms, and the folder name
-    # itself so relative paths like ../ma-lab are caught too.
+    # Raw form (~/...), expanded form, $HOME forms, and the folder name
+    # itself so relative paths are caught too.
     lab_forms = {
         lab_raw,
         lab_abs.lower(),

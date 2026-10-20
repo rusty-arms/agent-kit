@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "extraKnownMarketplaces": {
+    "rusty-arms": {
+      "source": {
+        "source": "github",
+        "repo": "rusty-arms/agent-kit"
+      }
+    }
+  },
+  "enabledPlugins": {
+    "agent-kit@rusty-arms": true
+  },
+  "permissions": {
+    "deny": [
+      "WebFetch(domain:archive.org)",
+      "Bash(git remote add:*)",
+      "Bash(git remote set-url:*)",
+      "Bash(git push:*)",
+      "Bash(gh:*)",
+      "Bash(curl:*)",
+      "Bash(wget:*)",
+      "Bash(scp:*)",
+      "Bash(rsync:*)",
+      "Edit(/CLAUDE.md)",
+      "Edit(/.claude/**)",
+      "Edit(/traces/**)"
+    ]
+  }
+}

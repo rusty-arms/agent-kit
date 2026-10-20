@@ -1,0 +1,16 @@
+{
+  "name": "rusty-arms",
+  "owner": {
+    "name": "Rusty Arms"
+  },
+  "metadata": {
+    "description": "Claude Code plugins for the Rusty Arms project."
+  },
+  "plugins": [
+    {
+      "name": "agent-kit",
+      "source": "./",
+      "description": "Rusty Arms guard rails for Claude Code: the clean-room guard, format/lint on edit, session discipline and a read-only reviewer."
+    }
+  ]
+}

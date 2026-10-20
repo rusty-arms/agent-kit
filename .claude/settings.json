@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "deny": [
+      "WebFetch(domain:archive.org)",
+      "Read(~/Develop/rusty-arms/ma-lab/**)",
+      "Edit(~/Develop/rusty-arms/ma-lab/**)",
+      "Edit(/.githooks/**)",
+      "Edit(/scripts/check_no_retail.py)",
+      "Edit(/scripts/check_links.py)",
+      "Edit(/.github/workflows/guard.yml)"
+    ]
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR\"/hooks/session-start.py"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "WebFetch|WebSearch|Bash|Read|Grep|Glob|Edit|Write|NotebookEdit|mcp__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR\"/hooks/cleanroom-guard.py"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR\"/hooks/format-lint.py"
+          }
+        ]
+      }
+    ]
+  }
+}

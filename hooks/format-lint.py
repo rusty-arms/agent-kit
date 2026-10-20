@@ -8,7 +8,8 @@ them and fixes the file; exits 0 when the file is clean or has no checker.
   a syntax check.
 - *.yml, *.yaml: yamllint, if installed.
 - *.json: must parse.
-- *.md: relative links must resolve (scripts/check_links.py).
+- *.md: relative links must resolve (the repo's scripts/check_links.py, or
+  the plugin's own copy if the repo has none).
 
 Standard library only.
 """
@@ -19,9 +20,11 @@ import shutil
 import subprocess
 import sys
 
+HERE = os.path.dirname(os.path.abspath(__file__))
 
-def run(cmd):
-    result = subprocess.run(cmd, capture_output=True, text=True)
+
+def run(cmd, cwd=None):
+    result = subprocess.run(cmd, capture_output=True, text=True, cwd=cwd)
     return result.returncode, (result.stdout + result.stderr).strip()
 
 
@@ -45,9 +48,14 @@ def check(path, root):
             return 1, f"invalid JSON: {exc}"
         return 0, ""
     if ext == ".md":
-        script = os.path.join(root, "scripts", "check_links.py")
-        if os.path.isfile(script):
-            return run([sys.executable, script, path])
+        # check_links.py runs from the git top level; outside a repo, skip it.
+        if run(["git", "-C", os.path.dirname(path), "rev-parse", "--show-toplevel"])[0] != 0:
+            return 0, ""
+        plugin_root = os.environ.get("CLAUDE_PLUGIN_ROOT") or os.path.dirname(HERE)
+        for base in (root, plugin_root):
+            script = os.path.join(base, "scripts", "check_links.py")
+            if os.path.isfile(script):
+                return run([sys.executable, script, path], cwd=os.path.dirname(path))
     return 0, ""
 
 

@@ -24,7 +24,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 
 
 def run(cmd, cwd=None):
-    result = subprocess.run(cmd, capture_output=True, text=True, cwd=cwd)
+    result = subprocess.run(cmd, capture_output=True, text=True, cwd=cwd, check=False)
     return result.returncode, (result.stdout + result.stderr).strip()
 
 

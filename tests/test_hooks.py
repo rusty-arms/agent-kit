@@ -38,6 +38,14 @@ class HookCase(unittest.TestCase):
         }
         self.env["CLEANROOM_BLOCKLIST"] = self.blocklist
         self.env["CLEANROOM_LAB"] = self.lab
+        # A temporary fence, so the real ~/Develop never affects the tests.
+        self.fence = os.path.join(self.tmp.name, "develop")
+        self.workspace = os.path.join(self.fence, "rusty-arms")
+        self.sibling = os.path.join(self.fence, "other-project")
+        os.makedirs(os.path.join(self.workspace, "core"))
+        os.makedirs(self.sibling)
+        self.env["CLEANROOM_FENCE"] = self.fence
+        self.env["CLEANROOM_WORKSPACE"] = self.workspace
 
     def run_hook(self, script, payload, **env):
         result = subprocess.run(
@@ -143,6 +151,79 @@ class GuardTests(HookCase):
 
     def test_unparseable_input_is_blocked(self):
         self.assertEqual(self.run_hook(GUARD, "not json")[0], 2)
+
+    def test_fence_allows_the_workspace(self):
+        core = os.path.join(self.workspace, "core")
+        cases = [
+            ("Read", {"file_path": os.path.join(core, "README.md")}),
+            ("Grep", {"pattern": "x", "path": self.workspace}),
+            ("Grep", {"pattern": "x"}),
+            ("Glob", {"pattern": "**/*.py", "path": self.workspace}),
+            ("Glob", {"pattern": os.path.join(self.workspace, "*", "*.md")}),
+            ("Bash", {"command": f"ls {self.workspace} && cat ../core/x"}),
+            ("Bash", {"command": "git -C ../core log --oneline -3 | head"}),
+            ("Bash", {"command": f"python3 -m tool --out={core}/out"}),
+        ]
+        for tool, tool_input in cases:
+            self.assertEqual(self.guard(tool, tool_input, cwd=core), 0, (tool, tool_input))
+
+    def test_fence_blocks_siblings(self):
+        core = os.path.join(self.workspace, "core")
+        cases = [
+            ("Read", {"file_path": os.path.join(self.sibling, "x.py")}),
+            ("Grep", {"pattern": "x", "path": self.fence}),
+            ("Glob", {"pattern": "**/*.py", "path": self.sibling}),
+            ("Glob", {"pattern": os.path.join(self.fence, "*", "*.py")}),
+            ("Bash", {"command": f"ls {self.fence}"}),
+            ("Bash", {"command": f"cat {self.sibling}/x.py"}),
+            ("Bash", {"command": "ls ../.."}),
+            ("Bash", {"command": "cd ../.. && ls"}),
+            ("Bash", {"command": "cat ../../other-project/x.py"}),
+            ("Bash", {"command": f"cat {self.workspace}/../other-project/x"}),
+            ("Bash", {"command": f"ls {self.fence}/rusty-*"}),
+            ("Bash", {"command": f"python3 -c \"import os; os.listdir('{self.sibling}')\""}),
+        ]
+        for tool, tool_input in cases:
+            self.assertEqual(self.guard(tool, tool_input, cwd=core), 2, (tool, tool_input))
+
+    def test_fence_blocks_searches_from_above(self):
+        above = os.path.dirname(self.fence)
+        self.assertEqual(self.guard("Bash", {"command": "find / -name '*.py'"}), 2)
+        self.assertEqual(self.guard("Bash", {"command": f"grep -r x {above}"}), 2)
+        self.assertEqual(self.guard("Grep", {"pattern": "x", "path": above}), 2)
+        self.assertEqual(self.guard("Grep", {"pattern": "x"}, cwd=above), 2)
+        self.assertEqual(self.guard("Bash", {"command": f"ls {self.fence[:-3]}*"}), 2)
+
+    def test_fence_allows_other_places(self):
+        self.assertEqual(self.guard("Bash", {"command": "ls /usr/lib && cat ./x"}), 0)
+        self.assertEqual(self.guard("Read", {"file_path": os.path.join(self.outside, "x")}), 0)
+        self.assertEqual(self.guard("Grep", {"pattern": "x"}), 0)
+        # A name that only starts with the fence's name is another folder.
+        self.assertEqual(self.guard("Read", {"file_path": self.fence + "er/x"}), 0)
+        self.assertEqual(self.guard("Read", {"file_path": self.workspace + "-old/x"}), 2)
+
+    def test_fence_blocks_sessions_started_outside_the_workspace(self):
+        self.assertEqual(self.guard("Bash", {"command": "ls"}, cwd=self.sibling), 2)
+        self.assertEqual(self.guard("Read", {"file_path": "x"}, cwd=self.fence), 2)
+
+    def test_fence_home_forms(self):
+        home_fence = os.path.join(os.path.expanduser("~"), "test-home-develop")
+        env = {
+            "CLEANROOM_FENCE": "~/test-home-develop",
+            "CLEANROOM_WORKSPACE": "~/test-home-develop/rusty-arms",
+        }
+        for text in (
+            "cat ~/test-home-develop/other/x",
+            "cat $HOME/test-home-develop/other/x",
+            "cat ${HOME}/test-home-develop/other/x",
+            f"cat {home_fence}/other/x",
+        ):
+            self.assertEqual(self.guard("Bash", {"command": text}, **env), 2, text)
+        allowed = "cat ~/test-home-develop/rusty-arms/core/x"
+        self.assertEqual(self.guard("Bash", {"command": allowed}, **env), 0)
+
+    def test_writes_may_name_the_fence(self):
+        self.assertEqual(self.guard("Write", {"file_path": "a.md", "content": self.sibling}), 0)
 
 
 class FormatLintTests(HookCase):

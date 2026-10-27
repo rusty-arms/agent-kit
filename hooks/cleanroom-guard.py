@@ -14,6 +14,12 @@ docs/setup/claude-guard.md.
   touches the lab folder, unless the session's cwd is itself inside the lab
   (observer sessions run from there). Writes and MCP tools are not lab-checked,
   so docs and messages can still name the lab's path.
+- Exits 2 if a local reading tool (Bash, Read, Grep, Glob) reaches into the
+  fence (~/Develop) anywhere outside the workspace (~/Develop/rusty-arms), so
+  no session goes looking through the owner's other code. That includes a
+  session started there, a glob that could expand into it, and a search that
+  would walk into it from above, such as `find /` or `grep -r ~`. Bash is
+  checked word by word, best effort, like the lab check.
 - Otherwise exits 0.
 
 The blocklist terms are never committed. They come from, in order:
@@ -26,11 +32,13 @@ a Claude Code cloud session (CLAUDE_CODE_REMOTE set), which only gets a
 warning so it is not locked out before its environment is configured.
 
 Environment overrides: CLEANROOM_BLOCKLIST (blocklist file), CLEANROOM_LAB
-(lab folder). Standard library only.
+(lab folder), CLEANROOM_FENCE and CLEANROOM_WORKSPACE (the fence and the
+workspace inside it). Standard library only.
 """
 
 import json
 import os
+import shlex
 import sys
 
 HOME = os.path.expanduser("~")
@@ -38,10 +46,15 @@ BLOCKLIST = os.environ.get(
     "CLEANROOM_BLOCKLIST", os.path.join(HOME, ".claude", "cleanroom-blocklist.txt")
 )
 LAB = os.environ.get("CLEANROOM_LAB", "~/Develop/rusty-arms/ma-lab")
+FENCE = os.environ.get("CLEANROOM_FENCE", "~/Develop")
+WORKSPACE = os.environ.get("CLEANROOM_WORKSPACE", "~/Develop/rusty-arms")
 POLICY = "https://github.com/rusty-arms/core/blob/main/docs/clean-room.md"
 
 # Tools whose input can read local files or the web. Only these are lab-checked.
 LAB_CHECKED_TOOLS = {"Bash", "Read", "Grep", "Glob", "WebFetch", "WebSearch"}
+# Tools that read the local file system. Only these are fence-checked.
+FENCE_CHECKED_TOOLS = {"Bash", "Read", "Grep", "Glob"}
+GLOB_CHARS = "*?["
 
 
 def block(reason):
@@ -64,6 +77,104 @@ def load_terms():
 def inside(path, root):
     path, root = os.path.realpath(path), os.path.realpath(root)
     return path == root or path.startswith(root.rstrip(os.sep) + os.sep)
+
+
+def under(path, root):
+    """Like inside(), on already-normalised lower-case strings, without touching the disk."""
+    return path == root or path.startswith(root.rstrip("/") + "/")
+
+
+def text_forms(path):
+    """The lower-case ways a command can spell an absolute path under the home folder."""
+    forms = {path.lower()}
+    if under(path, HOME):
+        rest = path[len(HOME) :].lower()
+        forms |= {"~" + rest, "$home" + rest, "${home}" + rest}
+    return forms
+
+
+def continues_name(char):
+    return char.isalnum() or char in "-_."
+
+
+def text_escapes_workspace(text, fence, workspace):
+    """True if the text spells a place in the fence that isn't in the workspace."""
+    tail = workspace[len(fence) :].lower()
+    for form in text_forms(fence):
+        start = text.find(form)
+        while start >= 0:
+            rest = text[start + len(form) :]
+            start = text.find(form, start + 1)
+            if rest[:1] and continues_name(rest[0]):
+                continue  # a different folder, such as ~/Developer
+            if rest.startswith(tail) and not (rest[len(tail) :][:1] and continues_name(rest[len(tail)])):
+                continue
+            return True
+    return False
+
+
+def path_words(tool, tool_input):
+    """Words in the tool's input that may be paths."""
+    words = [tool_input.get(key) for key in ("file_path", "path", "notebook_path")]
+    words = [w for w in words if isinstance(w, str) and w]
+    pattern = tool_input.get("pattern")
+    if tool == "Glob" and isinstance(pattern, str) and pattern:
+        base = tool_input.get("path")
+        words.append(os.path.join(base, pattern) if isinstance(base, str) and base else pattern)
+    if tool in ("Grep", "Glob") and not tool_input.get("path"):
+        words.append(".")  # they search the session's folder by default
+    command = tool_input.get("command")
+    if tool == "Bash" and isinstance(command, str):
+        lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+        lexer.whitespace_split = True
+        try:
+            tokens = list(lexer)
+        except ValueError:
+            tokens = command.split()
+        for token in tokens:
+            for part in token.split("="):
+                if "/" in part or part[:1] in ("~", "$", "."):
+                    words.append(part)
+    return words
+
+
+def resolve(word, cwd):
+    for prefix in ("${HOME}", "$HOME"):
+        if word.startswith(prefix):
+            word = HOME + word[len(prefix) :]
+    word = os.path.expanduser(word)
+    if not os.path.isabs(word):
+        word = os.path.join(cwd, word)
+    return os.path.normpath(word).lower()
+
+
+def escapes_workspace(path, fence, workspace):
+    """True if a resolved path can reach the fence outside the workspace."""
+    cuts = [path.find(c) for c in GLOB_CHARS if c in path]
+    if cuts:
+        literal = path[: min(cuts)]
+        if literal.startswith(workspace.rstrip("/") + "/"):
+            return False  # the glob stays inside the workspace
+        return fence.startswith(literal) or under(literal, fence)
+    if under(path, workspace):
+        return False
+    # Inside the fence, or a folder above it that a search would walk through.
+    return under(path, fence) or under(fence, path)
+
+
+def check_fence(tool, tool_input, text, cwd):
+    fence = os.path.normpath(os.path.expanduser(FENCE))
+    workspace = os.path.normpath(os.path.expanduser(WORKSPACE))
+    fence_l, workspace_l = fence.lower(), workspace.lower()
+    cwd = os.path.normpath(cwd or os.getcwd())
+    reason = "input reaches into ~/Develop outside ~/Develop/rusty-arms"
+    if under(cwd.lower(), fence_l) and not under(cwd.lower(), workspace_l):
+        block("this session started in ~/Develop outside ~/Develop/rusty-arms")
+    if text_escapes_workspace(text, fence, workspace):
+        block(reason)
+    for word in path_words(tool, tool_input):
+        if escapes_workspace(resolve(word, cwd), fence_l, workspace_l):
+            block(reason)
 
 
 def main():
@@ -90,8 +201,13 @@ def main():
             block("input matches a clean-room blocklist term")
 
     # A missing tool_name (older callers, tests) is treated as a reading tool.
-    if data.get("tool_name", "Read") not in LAB_CHECKED_TOOLS:
+    tool = data.get("tool_name", "Read")
+    if tool not in LAB_CHECKED_TOOLS:
         sys.exit(0)
+
+    tool_input = data.get("tool_input") or {}
+    if tool in FENCE_CHECKED_TOOLS and isinstance(tool_input, dict):
+        check_fence(tool, tool_input, text, data.get("cwd") or "")
 
     lab_raw = LAB.rstrip("/").lower()
     lab_abs = os.path.expanduser(LAB).rstrip("/")

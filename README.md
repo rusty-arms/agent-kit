@@ -8,7 +8,7 @@ Project policy lives in core: [clean-room policy](https://github.com/rusty-arms/
 
 | Part | File | What it does |
 |---|---|---|
-| Clean-room guard | [`hooks/cleanroom-guard.py`](hooks/cleanroom-guard.py) | `PreToolUse` hook. Blocks any tool call whose input contains a blocklist term, including writes and MCP tools. Blocks reading tools (`Bash`, `Read`, `Grep`, `Glob`, `WebFetch`, `WebSearch`) that touch the lab, unless the session started inside the lab. Fails closed when it has no terms. |
+| Clean-room guard | [`hooks/cleanroom-guard.py`](hooks/cleanroom-guard.py) | `PreToolUse` hook. Blocks any tool call whose input contains a blocklist term, including writes and MCP tools. Blocks reading tools (`Bash`, `Read`, `Grep`, `Glob`, `WebFetch`, `WebSearch`) that touch the lab, unless the session started inside the lab. Blocks local reading tools (`Bash`, `Read`, `Grep`, `Glob`) from anything in `~/Develop` outside `~/Develop/rusty-arms`, including searches that would walk into it from above, such as `find /`. Fails closed when it has no terms. |
 | Format and lint | [`hooks/format-lint.py`](hooks/format-lint.py) | `PostToolUse` hook on `Edit` and `Write`. Formats and lints Python with `ruff` when installed (otherwise checks syntax), lints YAML with `yamllint` when installed, checks that JSON parses and that Markdown links resolve. |
 | Session rules | [`hooks/session-start.py`](hooks/session-start.py) | `SessionStart` hook. Adds the session discipline and short clean-room rules to every session, marks lab sessions as observer sessions, and warns when the guard has no blocklist terms. |
 | Reviewer | [`agents/reviewer.md`](agents/reviewer.md) | Read-only Sonnet subagent that checks work against evidence: the brief, the specs, the provenance log, the tests. |
@@ -68,6 +68,10 @@ It copies `CLAUDE.md` and `.claude/settings.json` into the lab and never overwri
 | `CLEANROOM_BLOCKLIST` | `~/.claude/cleanroom-blocklist.txt` | Blocklist file. |
 | `CLEANROOM_BLOCKLIST_TERMS` | unset | Comma-separated terms, for cloud environments. |
 | `CLEANROOM_LAB` | `~/Develop/rusty-arms/ma-lab` | The lab folder. |
+| `CLEANROOM_FENCE` | `~/Develop` | The folder sessions may not look through, apart from the workspace. |
+| `CLEANROOM_WORKSPACE` | `~/Develop/rusty-arms` | The one place inside the fence that sessions may read. |
+
+The fence applies to every session with the plugin enabled, wherever it starts. A session started in another project under `~/Develop` is blocked from reading anything. To work on such a project with Claude Code, turn the plugin off for it in that project's `.claude/settings.json`: `"enabledPlugins": { "agent-kit@rusty-arms": false }`.
 
 ## Develop
 
